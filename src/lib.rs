@@ -1,5 +1,6 @@
 #![allow(unused, dead_code)]
 mod create_surface;
+mod structs; use structs::*;
 
 extern crate sdl3;
 extern crate wgpu;
@@ -7,10 +8,9 @@ extern crate wgpu;
 use std::sync::Arc;
 use std::time::Duration;
 use sdl3::{
-    event::{self, *}, keyboard::Keycode, video::Window, EventPump, Sdl
+    event::*, keyboard::Keycode, video::Window, EventPump, Sdl
 };
-use wgpu::Instance;
-
+use wgpu::util::DeviceExt;
 
 pub struct App {
     state: Option<AppState>,
@@ -28,13 +28,16 @@ pub struct App {
 
 pub struct AppState {
     window: Arc<Window>,
+    surface: wgpu::Surface<'static>,
     context: Arc<Sdl>,
     event_pump: EventPump,
-    instance: Arc<Instance>,
-    surface: wgpu::Surface<'static>,
+    
+    instance: Arc<wgpu::Instance>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    vertex_buffer: wgpu::Buffer,
+    render_pipeline: wgpu::RenderPipeline,
     is_surface_configured: bool,
     running: bool,
 } impl AppState {
@@ -44,7 +47,7 @@ pub struct AppState {
 
         // instance is the first thing we want to create with wgpu
         // it creates Adapters and Surfaces
-        let instance = Arc::new(Instance::new(&wgpu::InstanceDescriptor {
+        let instance = Arc::new(wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             ..Default::default()
         }));
@@ -88,7 +91,65 @@ pub struct AppState {
             desired_maximum_frame_latency: 2,
         }; 
 
-        Ok(Self {window, context, event_pump, instance, surface, device, queue, config, is_surface_configured: false, running: true})
+        surface.configure(&device, &config);
+
+        let shader = device.create_shader_module(wgpu::include_wgsl!("shader.wgsl"));
+        
+        let vertex_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(VERTICES),
+                usage: wgpu::BufferUsages::VERTEX
+            }
+        );
+
+        let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[],
+            push_constant_ranges: &[]
+        });
+
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[
+                    Vertex::desc(),
+                ],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
+
+        Ok(Self {window, context, event_pump, instance, surface, device, queue, config, vertex_buffer, render_pipeline, is_surface_configured: true, running: true})
     }
 
     pub fn window(&self) -> &Window {
@@ -109,11 +170,15 @@ pub struct AppState {
     }
 
     fn window_event(&mut self) {
-        for event in self.event_pump.poll_iter() {
+        let events: Vec<_> = self.event_pump.poll_iter().collect();
+        for event in events {
             match event {
                 Event::KeyDown { keycode: Some(code), .. } => {
                 }
                 Event::KeyUp { keycode: Some(code), .. } => {
+                }
+                Event::Window { win_event: WindowEvent::Resized(width, height), .. } => {
+                    self.resize(width as u32, height as u32);
                 }
                 Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), ..} => { self.running = false; },
                 _ => {}
@@ -148,7 +213,7 @@ pub struct AppState {
         {
             // RenderPassDescriptor only has three fields: label, color_attachments and depth_stencil_attatchment
             // color_attachments describe where to draw color to, we use texture_view so that we draw to the screen
-            let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &texture_view,
@@ -162,6 +227,10 @@ pub struct AppState {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
+
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.draw(0..VERTICES.len() as u32, 0..1);
         } // drop render_poss to release &mut encoder so that we can finish it
 
         self.queue.submit(std::iter::once(encoder.finish()));
