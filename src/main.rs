@@ -1,4 +1,4 @@
-use sqgui::run;
+use sq::run;
 
 #[tokio::main]
 async fn main() {

@@ -1,5 +1,5 @@
 [package]
-name = "sqgui"
+name = "sq"
 version = "0.1.0"
 edition = "2024"
 
@@ -11,6 +11,7 @@ rodio = "0.20.1"
 tokio = { version = "1.45.0", features = ["full"] }
 wgpu = "24.0.1"
 bytemuck = { version = "1.16", features = [ "derive" ] } 
+cgmath = "0.18.0"
 
 [dependencies.sdl3]
 version = "0.14.16"

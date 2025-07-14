@@ -2,6 +2,7 @@
 mod create_surface;
 mod structs; use structs::*;
 mod texture; use texture::*;
+mod camera; use camera::*;
 
 extern crate sdl3;
 extern crate wgpu;
@@ -41,6 +42,11 @@ pub struct AppState {
     index_buffer: wgpu::Buffer,
     diffuse_bind_group: wgpu::BindGroup,
     diffuse_texture: texture::Texture,
+    camera: Camera,
+    camera_controller: CameraController,
+    camera_uniform: CameraUniform,
+    camera_buffer: wgpu::Buffer,
+    camera_bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
     is_surface_configured: bool,
     running: bool,
@@ -158,10 +164,63 @@ pub struct AppState {
             }
         );
         
+        let camera = Camera {
+            eye: (0.0, 1.0, 2.0).into(),
+            target: (0.0, 0.0, 0.0).into(),
+            up: cgmath::Vector3::unit_y(),
+            aspect: config.width as f32 / config.height as f32,
+            fovy: 45.0,
+            znear: 0.1,
+            zfar: 100.0,
+        };
+
+        let camera_controller = CameraController::new(0.01);
+
+        let mut camera_uniform = CameraUniform::new();
+        camera_uniform.update_view_proj(&camera);
+
+        let camera_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Camera Buffer"),
+                contents: bytemuck::cast_slice(&[camera_uniform]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }
+        );
+        
+        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }
+                ],
+                label: Some("camera_bind_group_layout"),
+            });
+            
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &camera_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                }
+            ],
+            label: Some("camera_bind_group"),
+        });       
+
         let render_pipeline_layout = device.create_pipeline_layout(
             &wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&texture_bind_group_layout], // NEW!
+                bind_group_layouts: &[
+                    &texture_bind_group_layout,
+                    &camera_bind_group_layout,
+                ],
                 push_constant_ranges: &[],
             }
         );
@@ -206,7 +265,28 @@ pub struct AppState {
             cache: None,
         });
 
-        Ok(Self {window, context, event_pump, instance, surface, device, queue, config, vertex_buffer, index_buffer, render_pipeline, is_surface_configured: true, running: true, diffuse_bind_group, diffuse_texture })
+        Ok(Self {
+            window, 
+            context, 
+            event_pump, 
+            instance, 
+            surface, 
+            device, 
+            queue, 
+            config, 
+            vertex_buffer, 
+            index_buffer, 
+            diffuse_bind_group, 
+            diffuse_texture, 
+            camera, 
+            camera_controller,
+            camera_uniform,
+            camera_buffer,
+            camera_bind_group,
+            render_pipeline, 
+            is_surface_configured: true, 
+            running: true
+        })
     }
 
     pub fn window(&self) -> &Window {
@@ -223,7 +303,7 @@ pub struct AppState {
     }
 
     fn input(&mut self, event: &Event) {
-        todo!()
+        self.camera_controller.process_events(event);
     }
 
     fn window_event(&mut self) {
@@ -240,8 +320,10 @@ pub struct AppState {
                 Event::Quit {..} | Event::KeyDown { keycode: Some(Keycode::Escape), ..} => { self.running = false; },
                 _ => {}
             }
+            self.input(&event);
         }
 
+        self.update();
         match self.render() {
             Ok(_) => {}
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -252,6 +334,12 @@ pub struct AppState {
                 println!("Unable to render {}", e);
             }
         }
+    }
+
+    fn update(&mut self) {
+        self.camera_controller.update_camera(&mut self.camera);
+        self.camera_uniform.update_view_proj(&self.camera);
+        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -287,6 +375,7 @@ pub struct AppState {
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.draw_indexed(0..INDICES.len() as u32, 0, 0..1);
@@ -302,7 +391,7 @@ pub struct AppState {
 pub async fn run() {
     let sdl_context = sdl3::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
-    let window = video_subsystem.window("sqgui", 800, 600)
+    let window = video_subsystem.window("sq", 800, 600)
         .position_centered()
         .build()
         .unwrap();
