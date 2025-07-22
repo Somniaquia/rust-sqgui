@@ -2,24 +2,63 @@
 mod create_surface;
 mod structs; use structs::*;
 mod texture; use texture::*;
+mod input; use input::*;
+mod screen; use screen::*;
 mod camera; use camera::*;
 
 extern crate sdl3;
 extern crate wgpu;
 
+use slotmap::SlotMap;
 use std::sync::Arc;
 use std::time::Duration;
 use sdl3::{
     event::*, keyboard::Keycode, video::Window, EventPump, Sdl
 };
 use wgpu::util::DeviceExt;
+use cgmath::prelude::*;
+
+const NUM_INSTANCES_PER_ROW: u32 = 10;
+const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
 
 pub struct App {
-    state: Option<AppState>,
+    running: bool,
+    event_pump: EventPump,
+    input: InputManager,
+    render_context: RenderContext,
+    windows: Vec<RenderWindow>,
+    screens: ScreenManager,
+    // assets: AssetManager,
+    // audios: AudioManager,
 } impl App {
     pub fn new() -> Self {
+        let sdl_context = sdl3::init().unwrap();
+        let event_pump = sdl_context.event_pump().unwrap();
+        
+        let video_subsystem = sdl_context.video().unwrap();
+        let window = video_subsystem.window("sq", 800, 600)
+            .position_centered()
+            .build()
+            .unwrap();
+
+        let mut app_state = AppState::new(Arc::new(window), Arc::new(sdl_context.clone())).await.unwrap();
+        let mut surface_configured = false;
+
         Self {
-            state: None,
+            running: true,
+            event_pump,
+            input: InputManager::new(),
+            renderer: todo!(),
+            screens: ScreenManager::new(),
+        }
+    }
+
+    pub async fn run(&self) {
+        'running: loop {
+            self.state.window_event();
+            if (!self.running) {
+                break 'running
+            }
         }
     }
 } impl Default for App {
@@ -27,6 +66,30 @@ pub struct App {
         Self::new()
     }
 } 
+
+pub struct RenderContext {
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    pub instance: Arc<wgpu::Instance>,
+    pub pipelines: SlotMap<RenderPipelineKey, wgpu::RenderPipeline>,
+    pub materials: SlotMap<MaterialKey, Material>,
+    // pub meshes: MeshManager,
+
+}
+
+pub struct RenderWindow {
+    pub window: Arc<Window>,
+    pub surface: wgpu::Surface<'static>,
+    pub config: wgpu::SurfaceConfiguration,
+    pub camera: Camera,
+}
+
+slotmap::new_key_type! { pub struct RenderPipelineKey; }
+
+slotmap::new_key_type! { pub struct MaterialKey; }
+pub struct Material {
+    bind_group: wgpu::BindGroup,
+}
 
 pub struct AppState {
     window: Arc<Window>,
@@ -42,18 +105,20 @@ pub struct AppState {
     index_buffer: wgpu::Buffer,
     diffuse_bind_group: wgpu::BindGroup,
     diffuse_texture: texture::Texture,
+    instances: Vec<Instance>,
+    instance_buffer: wgpu::Buffer,
+
     camera: Camera,
     camera_controller: CameraController,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+
     render_pipeline: wgpu::RenderPipeline,
     is_surface_configured: bool,
-    running: bool,
 } impl AppState {
     pub async fn new(window: Arc<Window>, context: Arc<Sdl>) -> anyhow::Result<Self> {
         let size = window.size();
-        let event_pump = context.event_pump().unwrap();
 
         // instance is the first thing we want to create with wgpu
         // it creates Adapters and Surfaces
@@ -100,7 +165,7 @@ pub struct AppState {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        
+
         let diffuse_bytes = include_bytes!("../happy-tree.png");
         let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "../happy-tree.png").unwrap();
 
@@ -161,6 +226,33 @@ pub struct AppState {
                 label: Some("Index Buffer"), 
                 contents: bytemuck::cast_slice(INDICES),
                 usage: wgpu::BufferUsages::INDEX,
+            }
+        );
+
+        let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
+            (0..NUM_INSTANCES_PER_ROW).map(move |x| {
+                let position = cgmath::Vector3 { x: x as f32, y: 0.0, z: z as f32 } - INSTANCE_DISPLACEMENT;
+
+                let rotation = if position.is_zero() {
+                    // this is needed so an object at (0, 0, 0) won't get scaled to zero
+                    // as Quaternions can affect scale if they're not created correctly
+                    cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+                } else {
+                    cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+                };
+
+                Instance {
+                    position, rotation,
+                }
+            })
+        }).collect::<Vec<_>>();
+
+        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        let instance_buffer = device.create_buffer_init(
+        &wgpu::util::BufferInitDescriptor {
+                label: Some("Instance Buffer"),
+                contents: bytemuck::cast_slice(&instance_data),
+                usage: wgpu::BufferUsages::VERTEX,
             }
         );
         
@@ -233,6 +325,7 @@ pub struct AppState {
                 entry_point: Some("vs_main"),
                 buffers: &[
                     Vertex::desc(),
+                    InstanceRaw::desc(),
                 ],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
@@ -268,7 +361,6 @@ pub struct AppState {
         Ok(Self {
             window, 
             context, 
-            event_pump, 
             instance, 
             surface, 
             device, 
@@ -278,6 +370,8 @@ pub struct AppState {
             index_buffer, 
             diffuse_bind_group, 
             diffuse_texture, 
+            instances,
+            instance_buffer,
             camera, 
             camera_controller,
             camera_uniform,
@@ -285,7 +379,6 @@ pub struct AppState {
             camera_bind_group,
             render_pipeline, 
             is_surface_configured: true, 
-            running: true
         })
     }
 
@@ -377,6 +470,7 @@ pub struct AppState {
             render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.draw_indexed(0..INDICES.len() as u32, 0, 0..1);
         } // drop render_poss to release &mut encoder so that we can finish it
@@ -385,24 +479,5 @@ pub struct AppState {
         surface_texture.present();
 
         Ok(())
-    }
-}
-
-pub async fn run() {
-    let sdl_context = sdl3::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
-    let window = video_subsystem.window("sq", 800, 600)
-        .position_centered()
-        .build()
-        .unwrap();
-
-    let mut app_state = AppState::new(Arc::new(window), Arc::new(sdl_context.clone())).await.unwrap();
-    let mut surface_configured = false;
-
-    'running: loop {
-        app_state.window_event();
-        if (!app_state.running) {
-            break 'running
-        }
     }
 }

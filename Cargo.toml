@@ -10,8 +10,9 @@ raw-window-handle = "0.6.2"
 rodio = "0.20.1"
 tokio = { version = "1.45.0", features = ["full"] }
 wgpu = "24.0.1"
-bytemuck = { version = "1.16", features = [ "derive" ] } 
+bytemuck = { version = "1.16", features = ["derive"] } 
 cgmath = "0.18.0"
+slotmap = { version = "1.0.7", features = ["serde"]}
 
 [dependencies.sdl3]
 version = "0.14.16"
