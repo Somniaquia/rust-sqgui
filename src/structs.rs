@@ -41,12 +41,12 @@ pub const INDICES: &[u16] = &[
     2, 3, 4,
 ];
 
-pub struct Instance {
+pub struct ModelInstance {
     pub position: cgmath::Vector3<f32>,
     pub rotation: cgmath::Quaternion<f32>,
-} impl Instance {
-    pub fn to_raw(&self) -> InstanceRaw {
-        InstanceRaw {
+} impl ModelInstance {
+    pub fn to_raw(&self) -> ModelInstanceRaw {
+        ModelInstanceRaw {
             model: (cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation)).into(),
         }
     }
@@ -54,13 +54,13 @@ pub struct Instance {
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct InstanceRaw {
+pub struct ModelInstanceRaw {
     pub model: [[f32; 4]; 4],
-} impl InstanceRaw {
+} impl ModelInstanceRaw {
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
         wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
+            array_stride: mem::size_of::<ModelInstanceRaw>() as wgpu::BufferAddress,
             // We need to switch from using a step mode of Vertex to Instance
             // This means that our shaders will only change to use the next
             // instance when the shader starts processing a new instance
