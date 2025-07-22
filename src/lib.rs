@@ -1,12 +1,13 @@
 #![allow(unused, dead_code)]
 mod create_surface;
-mod structs; use structs::*;
+mod structs; use rodio::cpal::FromSample;
+use structs::*;
 mod texture; use texture::*;
 mod input; use input::*;
 mod screen; use screen::*;
 mod camera; use camera::*;
 
-extern crate sdl3; use sdl3::{*, event::*, video::*};
+extern crate sdl3; use sdl3::{*, event::*, video::*, pen::*};
 extern crate wgpu; use wgpu::*;
 use cgmath::prelude::*;
 
@@ -29,22 +30,22 @@ pub struct App {
     // assets: AssetManager,
     // audios: AudioManager,
 } impl App {
-    pub async fn new(sdl_context: Sdl) -> Self {
+    pub async fn new() -> anyhow::Result<Self> {
         let sdl_context = sdl3::init().unwrap();
         let event_pump = sdl_context.event_pump().unwrap();
-        let render_context = RenderContext::new(sdl_context).await;
+        let render_context = RenderContext::new(sdl_context).await?;
 
-        Self {
+        Ok(Self {
             running: true,
             event_pump,
             render_context,
-            windows: todo!(),
+            windows: HashMap::new(),
             screens: ScreenManager::new(),
-        }
+        })
     }
 
     pub async fn run(&mut self) {
-        'running: loop {
+        'running: loop { // todo: framerates
             self.update();
             if (!self.running) {
                 break 'running
@@ -56,7 +57,7 @@ pub struct App {
         match event {
             Event::Window { window_id, .. }
             | Event::KeyDown { window_id, .. }
-            | Event::KeyDown { window_id, .. }
+            | Event::KeyUp { window_id, .. }
             | Event::MouseMotion { window_id, .. }
             | Event::MouseButtonDown { window_id, .. }
             | Event::MouseButtonUp { window_id, .. }
@@ -67,6 +68,13 @@ pub struct App {
             | Event::DropText { window_id, .. }
             | Event::DropFile { window_id, ..}
             | Event::DropComplete { window_id, .. }  => Some(*window_id),
+            Event::PenMotion { window, .. }
+            | Event::PenUp { window, .. }
+            | Event::PenDown { window, .. }
+            | Event::PenButtonDown { window, .. }
+            | Event::PenButtonUp { window, .. }
+            | Event::PenProximityIn { window, .. }
+            | Event::PenProximityOut { window, .. } => Some(*window),
             _ => None,
         }
     }
@@ -96,7 +104,11 @@ pub struct App {
                     _ => {}
                 }
             }
-        }        
+        }
+
+        for (_, window) in self.windows.iter_mut() {
+            window.inputs.update(&self.screens);
+        }
     }
 
     fn render(&mut self) {
@@ -114,15 +126,12 @@ pub struct App {
             }
         }
     }
-} impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
-} 
+}
 
 pub struct RenderContext {
     pub sdl_context: Sdl,
     pub instance: Arc<Instance>,
+    pub adapter: Adapter,
     pub device: Device,
     pub video_subsystem: VideoSubsystem,
     pub queue: Queue,
@@ -131,15 +140,11 @@ pub struct RenderContext {
     // pub meshes: MeshManager,
 } impl RenderContext {
     pub async fn new(sdl_context: Sdl) -> anyhow::Result<Self> {
-        // instance is the first thing we want to create with wgpu
-        // it creates Adapters and Surfaces
         let instance = Arc::new(Instance::new(&InstanceDescriptor {
             backends: Backends::PRIMARY,
             ..Default::default()
         }));
         
-        // adapter is a handle for our actual graphics card
-        // used to create Device and Queue
         let adapter = instance.request_adapter(
             &RequestAdapterOptions {
                 power_preference: PowerPreference::LowPower,
@@ -159,7 +164,7 @@ pub struct RenderContext {
 
         let video_subsystem = sdl_context.video().unwrap();
 
-        Ok(sdl_context, instance, device, video_subsystem, queue)
+        Ok(Self { sdl_context, instance, adapter, device, video_subsystem, queue, pipelines: SlotMap::with_key(), materials: SlotMap::with_key() })
     }
 }
 
@@ -173,15 +178,15 @@ pub struct RenderWindow {
     pub dirty: bool,
 } impl RenderWindow {
     pub fn new(render_context: &RenderContext) -> anyhow::Result<Self> {
-        let window = render_context.video_subsystem.window("sq", 800, 600)
+        let window = Arc::new(render_context.video_subsystem.window("sq", 800, 600)
             .position_centered()
             .build()
-            .unwrap();
+            .unwrap());
         let size = window.size();
 
-        let surface =  create_surface::create_surface(instance.clone(), window.clone()).unwrap();
+        let surface =  create_surface::create_surface(render_context.instance.clone(), window.clone()).unwrap();
         
-        let surface_caps = surface.get_capabilities(&adapter);
+        let surface_caps = surface.get_capabilities(&render_context.adapter);
         let surface_format = surface_caps.formats.iter()
             .find(|f| f.is_srgb())
             .copied()
@@ -199,8 +204,10 @@ pub struct RenderWindow {
             desired_maximum_frame_latency: 2,
         };
 
-        surface.configure(&device, &config);
-
+        surface.configure(&render_context.device, &config);
+        
+        let inputs = InputManager::new();
+        let camera = todo!();
 
         Ok(Self { window, surface, config, inputs, camera, dirty: false })
     }
@@ -216,12 +223,11 @@ pub struct RenderWindow {
 
     pub fn handle_event(&mut self, event: &Event, render_context: &RenderContext) {
         match event {
-            Event::KeyDown { keycode: Some(code), .. } => {
-            }
-            Event::KeyUp { keycode: Some(code), .. } => {
+            Event::KeyDown {..} | Event::KeyUp {..} | Event::MouseButtonDown {..} | Event::MouseButtonUp {..} | Event::MouseMotion {..} | Event::MouseWheel {..} => {
+                self.inputs.handle_event(event);
             }
             Event::Window { win_event: WindowEvent::Resized(width, height), .. } => {
-                self.resize(&app.render_context.device, *width as u32, *height as u32);
+                self.resize(&render_context.device, *width as u32, *height as u32);
             }
             _ => {}
         }
@@ -236,7 +242,7 @@ pub struct RenderWindow {
         let texture_view = surface_texture.texture.create_view(&TextureViewDescriptor::default());
 
         // CommandEncoder builds a command buffer to send to the GPU
-        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
+        let mut encoder = render_context.device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
         
@@ -258,16 +264,16 @@ pub struct RenderWindow {
                 timestamp_writes: None,
             });
 
-            render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint16);
-            render_pass.draw_indexed(0..INDICES.len() as u32, 0, 0..1);
+            // render_pass.set_pipeline(&self.render_pipeline);
+            // render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+            // render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+            // render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            // render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            // render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint16);
+            // render_pass.draw_indexed(0..INDICES.len() as u32, 0, 0..1);
         } // drop render_poss to release &mut encoder so that we can finish it
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        render_context.queue.submit(std::iter::once(encoder.finish()));
         surface_texture.present();
 
         Ok(())
@@ -279,264 +285,4 @@ slotmap::new_key_type! { pub struct RenderPipelineKey; }
 slotmap::new_key_type! { pub struct MaterialKey; }
 pub struct Material {
     bind_group: BindGroup,
-}
-
-pub struct AppState {
-    context: Arc<Sdl>,
-    
-    vertex_buffer: Buffer,
-    index_buffer: Buffer,
-    diffuse_bind_group: BindGroup,
-    diffuse_texture: texture::Texture,
-    instances: Vec<ModelInstance>,
-    instance_buffer: Buffer,
-
-    camera: Camera,
-    camera_controller: CameraController,
-    camera_uniform: CameraUniform,
-    camera_buffer: Buffer,
-    camera_bind_group: BindGroup,
-
-    render_pipeline: RenderPipeline,
-    is_surface_configured: bool,
-} impl AppState {
-    pub async fn new(window: Arc<Window>, context: Arc<Sdl>) -> anyhow::Result<Self> {
-
-        let diffuse_bytes = include_bytes!("../happy-tree.png");
-        let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "../happy-tree.png").unwrap();
-
-        let texture_bind_group_layout = 
-            device.create_bind_group_layout((&BindGroupLayoutDescriptor {
-                entries: &[
-                    BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: TextureViewDimension::D2,
-                            sample_type: TextureSampleType::Float  {  filterable: true  },
-                        },
-                        count: None,
-                    },
-                    BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: ShaderStages::FRAGMENT,
-                        ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-                label: Some("texture_bind_group_layout"),
-            }));
-
-        let diffuse_bind_group = device.create_bind_group(
-            &BindGroupDescriptor {
-                layout: &texture_bind_group_layout,
-                entries: &[
-                    BindGroupEntry {
-                        binding: 0,
-                        resource: BindingResource::TextureView(&diffuse_texture.view),
-                    },
-                    BindGroupEntry {
-                        binding: 1,
-                        resource: BindingResource::Sampler(&diffuse_texture.sampler),
-                    }
-                ],
-                label: Some("diffuse_bind_group"),
-            }
-        );
-        
-
-        let shader = device.create_shader_module(include_wgsl!("shader.wgsl"));
-        
-        let vertex_buffer = device.create_buffer_init(
-            &util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(VERTICES),
-                usage: BufferUsages::VERTEX
-            }
-        );
-
-        let index_buffer = device.create_buffer_init(
-            &util::BufferInitDescriptor {
-                label: Some("Index Buffer"), 
-                contents: bytemuck::cast_slice(INDICES),
-                usage: BufferUsages::INDEX,
-            }
-        );
-
-        let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
-            (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                let position = cgmath::Vector3 { x: x as f32, y: 0.0, z: z as f32 } - INSTANCE_DISPLACEMENT;
-
-                let rotation = if position.is_zero() {
-                    // this is needed so an object at (0, 0, 0) won't get scaled to zero
-                    // as Quaternions can affect scale if they're not created correctly
-                    cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
-                } else {
-                    cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
-                };
-
-                ModelInstance {
-                    position, rotation,
-                }
-            })
-        }).collect::<Vec<_>>();
-
-        let instance_data = instances.iter().map(ModelInstance::to_raw).collect::<Vec<_>>();
-        let instance_buffer = device.create_buffer_init(
-        &util::BufferInitDescriptor {
-                label: Some("Instance Buffer"),
-                contents: bytemuck::cast_slice(&instance_data),
-                usage: BufferUsages::VERTEX,
-            }
-        );
-        
-        let camera = Camera {
-            eye: (0.0, 1.0, 2.0).into(),
-            target: (0.0, 0.0, 0.0).into(),
-            up: cgmath::Vector3::unit_y(),
-            aspect: config.width as f32 / config.height as f32,
-            fovy: 45.0,
-            znear: 0.1,
-            zfar: 100.0,
-        };
-
-        let camera_controller = CameraController::new(0.01);
-
-        let mut camera_uniform = CameraUniform::new();
-        camera_uniform.update_view_proj(&camera);
-
-        let camera_buffer = device.create_buffer_init(
-            &util::BufferInitDescriptor {
-                label: Some("Camera Buffer"),
-                contents: bytemuck::cast_slice(&[camera_uniform]),
-                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            }
-        );
-        
-        let camera_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::VERTEX,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }
-                ],
-                label: Some("camera_bind_group_layout"),
-            });
-            
-        let camera_bind_group = device.create_bind_group(&BindGroupDescriptor {
-            layout: &camera_bind_group_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                }
-            ],
-            label: Some("camera_bind_group"),
-        });       
-
-        let render_pipeline_layout = device.create_pipeline_layout(
-            &PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[
-                    &texture_bind_group_layout,
-                    &camera_bind_group_layout,
-                ],
-                push_constant_ranges: &[],
-            }
-        );
-
-        let render_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[
-                    Vertex::desc(),
-                    ModelInstanceRaw::desc(),
-                ],
-                compilation_options: PipelineCompilationOptions::default(),
-            },
-            fragment: Some(FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(ColorTargetState {
-                    format: config.format,
-                    blend: Some(BlendState::REPLACE),
-                    write_mask: ColorWrites::ALL,
-                })],
-                compilation_options: PipelineCompilationOptions::default(),
-            }),
-            primitive: PrimitiveState {
-                topology: PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: FrontFace::Ccw,
-                cull_mode: Some(Face::Back),
-                polygon_mode: PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-            cache: None,
-        });
-
-        Ok(Self {
-            window, 
-            context, 
-            instance, 
-            surface, 
-            device, 
-            queue, 
-            config, 
-            vertex_buffer, 
-            index_buffer, 
-            diffuse_bind_group, 
-            diffuse_texture, 
-            instances,
-            instance_buffer,
-            camera, 
-            camera_controller,
-            camera_uniform,
-            camera_buffer,
-            camera_bind_group,
-            render_pipeline, 
-            is_surface_configured: true, 
-        })
-    }
-
-    fn resize(&mut self, width: u32, height: u32) {
-        if width > 0 && height > 0 {
-            self.config.width = width;
-            self.config.height = height;
-            self.surface.configure(&self.device, &self.config);
-            self.is_surface_configured = true;
-        }
-    }
-
-    fn input(&mut self, event: &Event) {
-        self.camera_controller.process_events(event);
-    }
-
-    
-
-    fn update(&mut self) {
-        self.camera_controller.update_camera(&mut self.camera);
-        self.camera_uniform.update_view_proj(&self.camera);
-        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
-    }
-
-    
 }

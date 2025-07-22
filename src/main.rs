@@ -1,6 +1,7 @@
-use sq::run;
+use sq::App;
 
 #[tokio::main]
 async fn main() {
-    run().await;
+    let app = App::new().await;
+    app.run().await;
 }

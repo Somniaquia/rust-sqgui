@@ -2,9 +2,10 @@ use slotmap::SlotMap;
 
 pub struct ScreenManager {
     pub screens: SlotMap<ScreenKey, Screen>,
+    pub active_screen: Option<ScreenKey>,
 } impl ScreenManager {
     pub fn new() -> Self {
-        Self { screens: SlotMap::with_key() }
+        Self { screens: SlotMap::with_key(), active_screen: None }
     }
 }
 
