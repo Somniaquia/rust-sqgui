@@ -4,7 +4,7 @@ use sq::App;
 async fn main() -> anyhow::Result<()> {
     let mut app = App::new().await?;
     
-    app.create_window("sq", 2560, 1440).await?;
+    app.create_window("sq", 800, 600).await?;
     app.run().await;
     Ok(())
 }

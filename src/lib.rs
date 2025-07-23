@@ -160,24 +160,24 @@ pub struct RenderContext {
     pub async fn new(sdl_context: Sdl) -> anyhow::Result<Self> {
         let video_subsystem = sdl_context.video()?;
 
-        let temp_window = Arc::new(video_subsystem.window("temp", 1, 1)
-            .hidden()
-            .build()?);
+        // let temp_window = Arc::new(video_subsystem.window("temp", 1, 1)
+        //     .hidden()
+        //     .build()?);
 
         let instance = Arc::new(Instance::new(&InstanceDescriptor {
-            backends: Backends::SECONDARY,
+            backends: Backends::PRIMARY,
             ..Default::default()
         }));
 
-        let temp_surface = unsafe {
-            create_surface::create_surface(instance.clone(), temp_window.clone())?
-        };
+        // let temp_surface = unsafe {
+        //     create_surface::create_surface(instance.clone(), temp_window.clone())?
+        // };
         
         let adapter = instance.request_adapter(
             &RequestAdapterOptions {
                 power_preference: PowerPreference::LowPower,
                 force_fallback_adapter: false,
-                compatible_surface: Some(&temp_surface), // surfaces, binded to windows are created AFTER context, what do i do here
+                compatible_surface: None,
             },
         ).await.ok_or(anyhow::anyhow!("Failed to get adapter"))?; 
 
@@ -186,8 +186,8 @@ pub struct RenderContext {
             None,
         ).await?;
 
-        drop(temp_surface);
-        drop(temp_window);
+        // drop(temp_surface);
+        // drop(temp_window);
 
         Ok(Self { 
             sdl_context, 
@@ -211,8 +211,11 @@ pub struct RenderWindow {
     pub dirty: bool,
 } impl RenderWindow {
     pub fn new(render_context: &RenderContext, title: &str, width: u32, height: u32) -> anyhow::Result<Self> {
-        let window = Arc::new(render_context.video_subsystem.window("sq", 800, 600)
+        let window = Arc::new(render_context.video_subsystem.window(title, width, height)
             .position_centered()
+            .resizable()
+            .high_pixel_density()
+            .vulkan()
             .build()?
         );
 
@@ -258,18 +261,54 @@ pub struct RenderWindow {
 
     pub fn handle_event(&mut self, event: &Event, render_context: &RenderContext) {
         match event {
-            Event::KeyDown {..} | Event::KeyUp {..} | Event::MouseButtonDown {..} | Event::MouseButtonUp {..} | Event::MouseMotion {..} | Event::MouseWheel {..} => {
-                self.inputs.handle_event(event);
-            }
             Event::Window { win_event: WindowEvent::Resized(width, height), .. } => {
+                println!("RESIZE EVENT: {}x{}", width, height); 
                 self.resize(&render_context.device, *width as u32, *height as u32);
             }
-            _ => {}
+            _ => self.inputs.handle_event(event)
         }
     }
 
     fn render(&self, render_context: &RenderContext) -> Result<(), SurfaceError> {
-        // todo: definable pipeline
+        
+        let surface_texture = self.surface.get_current_texture()?;
+        let texture_view = surface_texture.texture.create_view(&TextureViewDescriptor::default());
+
+        // CommandEncoder builds a command buffer to send to the GPU
+        let mut encoder = render_context.device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("Render Encoder"),
+        });
+        
+        {
+            // RenderPassDescriptor only has three fields: label, color_attachments and depth_stencil_attatchment
+            // color_attachments describe where to draw color to, we use texture_view so that we draw to the screen
+            let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &texture_view,
+                    resolve_target: None, 
+                    ops: Operations {
+                        load: LoadOp::Clear(Color { r: 0.1, g: 0.2, b: 0.3, a: 1.0}),
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+
+            // render_pass.set_pipeline(&self.render_pipeline);
+            // render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+            // render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+            // render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            // render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            // render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint16);
+            // render_pass.draw_indexed(0..INDICES.len() as u32, 0, 0..1);
+        } // drop render_poss to release &mut encoder so that we can finish it
+
+        render_context.queue.submit(std::iter::once(encoder.finish()));
+        surface_texture.present();
+
         Ok(())
     }
  }
