@@ -1,6 +1,17 @@
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct Vec2I {
+    pub x: i32,
+    pub y: i32
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct Vec2 {
+    pub x: f32,
+    pub y: f32
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-
 pub struct Vertex {
     position: [f32; 3],
     tex_coords: [f32; 2],

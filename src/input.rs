@@ -3,12 +3,29 @@ use std::collections::hash_map::Entry;
 use std::collections::*;
 use sdl3::keyboard;
 use sdl3::mouse;
+use sdl3::mouse::MouseButton;
 use slotmap::SlotMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] 
-pub enum Button { Key(keyboard::Keycode), Mouse(mouse::MouseButton) }
+pub enum Button { 
+    Key(keyboard::Keycode), 
+    Mouse(mouse::MouseButton), 
+    Pen(u8),
+}
 #[derive(Debug, Clone, Copy)] 
 pub enum ButtonState { Up(i32), Down(i32) } // up/down simply means current state, pressed/released now means keystate was also changed that frame
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PenState {
+    pub pressure: f32, // 0.0 ~ 1.0
+    pub tilt: Vec2, // -90.0 ~ 90.0, left-right, top-down
+    pub distance: f32, // 0.0 ~ 1.0, distance from pen to tablet
+    pub rotation: f32, // -180.0 ~ 179.9, clockwise, barrel rotation
+    pub slider: f32, // 0.0 ~ 1.0, pen finger wheel or slider whatever it is
+    pub tangential_pressure: f32, // 0.0 ~ 1.0, barrel pressure
+    pub proximity: bool,
+    pub is_down: bool,
+}
 
 slotmap::new_key_type! { pub struct KeybindKey; }
 pub struct Keybind {
@@ -26,13 +43,17 @@ pub struct InputManager {
     pub button_states: HashMap<Button, ButtonState>,
     pub mouse_pos_history: VecDeque<(f32, f32)>,
     pub scroll: (f32, f32),
+    pub pen: PenState,
+    physical_left_button_down: bool,
 } impl InputManager {
     pub fn new() -> Self {
         Self {
             keybinds: SlotMap::with_key(),
             button_states: HashMap::new(), 
             mouse_pos_history: VecDeque::new(),
-            scroll: (0.0, 0.0)
+            scroll: (0.0, 0.0),
+            pen: PenState::default(),
+            physical_left_button_down: false
         }
     }
 
@@ -40,11 +61,21 @@ pub struct InputManager {
         self.button_states.clear();
         self.mouse_pos_history.clear();
         self.scroll = (0.0, 0.0);
+        self.pen = PenState::default();
+        self.physical_left_button_down = false;
     }
     
     pub fn handle_event(&mut self, event: &Event) {
         match event {
-            Event::KeyDown {..} | Event::KeyUp {..} | Event::MouseButtonDown {..} | Event::MouseButtonUp {..} => self.handle_button(event),
+            Event::KeyDown {..} 
+            | Event::KeyUp {..} 
+            | Event::MouseButtonDown {..} 
+            | Event::MouseButtonUp {..} 
+            | Event::PenDown {..} 
+            | Event::PenUp {..} 
+            | Event::PenButtonDown {..} 
+            | Event::PenButtonUp {..} => self.handle_button(event),
+
             Event::MouseMotion { x, y, .. } => {
                 self.mouse_pos_history.push_front((*x, *y));
                 if self.mouse_pos_history.len() > 10 { self.mouse_pos_history.pop_back(); }
@@ -52,20 +83,61 @@ pub struct InputManager {
             Event::MouseWheel { x, y, .. } => {
                 self.scroll = (*x, *y);
             },
-            Event::PenUp {..} => {}
+            Event::PenMotion { x, y, .. } => {}
+            Event::PenAxis { axis, value, .. } => {
+                match axis {
+                    PenAxis::Pressure => self.pen.pressure = *value,
+                    PenAxis::XTilt => self.pen.tilt.x = *value,
+                    PenAxis::YTilt => self.pen.tilt.y = *value,
+                    PenAxis::Distance => self.pen.distance = *value,
+                    PenAxis::Rotation => self.pen.rotation = *value,
+                    PenAxis::Slider => self.pen.slider = *value,
+                    PenAxis::TangentialPressure => self.pen.tangential_pressure = *value,
+                    PenAxis::Unknown => {},
+                    PenAxis::Count => {},
+                    _ => todo!(),
+                }
+            }
+            Event::PenProximityIn {..} => self.pen.proximity = true,
+            Event::PenProximityOut {..} => self.pen.proximity = false,
             _ => {}
         }
         
     }
 
     fn handle_button(&mut self, event: &Event) {
-        let (button, is_pressed) = match event {
+        let (button, mut is_pressed) = match event {
             Event::KeyDown { keycode: Some(key), .. } => (Button::Key(*key), true),
             Event::KeyUp { keycode: Some(key), .. } => (Button::Key(*key), false),
+            Event::MouseButtonDown { mouse_btn: MouseButton::Left, .. } => {
+                self.physical_left_button_down = true;
+                (Button::Mouse(mouse::MouseButton::Left), true)
+            },
+            Event::MouseButtonUp { mouse_btn: MouseButton::Left, .. } => {
+                self.physical_left_button_down = false;
+                (Button::Mouse(mouse::MouseButton::Left), self.pen.is_down)
+            },
             Event::MouseButtonDown { mouse_btn, .. } => (Button::Mouse(*mouse_btn), true),
             Event::MouseButtonUp { mouse_btn, .. } => (Button::Mouse(*mouse_btn), false),
+            Event::PenDown { .. } => {
+                self.pen.is_down = true;
+                (Button::Mouse(mouse::MouseButton::Left), true)
+            }
+            Event::PenUp { .. } => {
+                self.pen = PenState {
+                    proximity: self.pen.proximity,
+                    ..Default::default()
+                };
+                (Button::Mouse(mouse::MouseButton::Left), self.physical_left_button_down)
+            }
+            Event::PenButtonDown { button, .. } => (Button::Pen(*button), true),
+            Event::PenButtonUp { button, .. } => (Button::Pen(*button), false),
             _ => return,
         };
+
+        if (button == Button::Mouse(mouse::MouseButton::Left)) {
+            is_pressed = is_pressed && self.pen.is_down;
+        }
 
         let new_state = match self.button_states.entry(button) {
             Entry::Occupied(mut entry) => match entry.get() {

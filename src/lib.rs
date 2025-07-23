@@ -17,9 +17,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use util::DeviceExt;
 
-const NUM_INSTANCES_PER_ROW: u32 = 10;
-const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
-
 pub struct App {
     running: bool,
     event_pump: EventPump,
@@ -51,6 +48,10 @@ pub struct App {
                 break 'running
             }
         }
+    }
+
+    pub async fn create_window(&mut self, title: &str, width: u32, height: u32) -> anyhow::Result<u32> {
+        let window = RenderWindow
     }
 
     fn get_window_id(event: &Event) -> Option<u32> {
@@ -128,6 +129,13 @@ pub struct App {
     }
 }
 
+slotmap::new_key_type! { pub struct RenderPipelineKey; }
+
+slotmap::new_key_type! { pub struct MaterialKey; }
+pub struct Material {
+    bind_group: BindGroup,
+}
+
 pub struct RenderContext {
     pub sdl_context: Sdl,
     pub instance: Arc<Instance>,
@@ -149,7 +157,7 @@ pub struct RenderContext {
             &RequestAdapterOptions {
                 power_preference: PowerPreference::LowPower,
                 force_fallback_adapter: false,
-                compatible_surface: todo!(),
+                compatible_surface: todo!(), // surfaces, binded to windows are created AFTER context, what do i do here
             },
         ).await.unwrap(); 
 
@@ -234,55 +242,7 @@ pub struct RenderWindow {
     }
 
     fn render(&self, render_context: &RenderContext) -> Result<(), SurfaceError> {
-        // if !self.is_surface_configured {
-        //     return Ok(());
-        // }
-        // wait for the surface to provide a new SurfaceTexture to render to
-        let surface_texture = self.surface.get_current_texture()?;
-        let texture_view = surface_texture.texture.create_view(&TextureViewDescriptor::default());
-
-        // CommandEncoder builds a command buffer to send to the GPU
-        let mut encoder = render_context.device.create_command_encoder(&CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
-        
-        {
-            // RenderPassDescriptor only has three fields: label, color_attachments and depth_stencil_attatchment
-            // color_attachments describe where to draw color to, we use texture_view so that we draw to the screen
-            let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &texture_view,
-                    resolve_target: None, 
-                    ops: Operations {
-                        load: LoadOp::Clear(Color { r: 0.1, g: 0.2, b: 0.3, a: 1.0}),
-                        store: StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
-
-            // render_pass.set_pipeline(&self.render_pipeline);
-            // render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-            // render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-            // render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            // render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            // render_pass.set_index_buffer(self.index_buffer.slice(..), IndexFormat::Uint16);
-            // render_pass.draw_indexed(0..INDICES.len() as u32, 0, 0..1);
-        } // drop render_poss to release &mut encoder so that we can finish it
-
-        render_context.queue.submit(std::iter::once(encoder.finish()));
-        surface_texture.present();
-
+        // todo: definable pipeline
         Ok(())
     }
  }
-
-slotmap::new_key_type! { pub struct RenderPipelineKey; }
-
-slotmap::new_key_type! { pub struct MaterialKey; }
-pub struct Material {
-    bind_group: BindGroup,
-}
