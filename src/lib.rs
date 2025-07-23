@@ -1,7 +1,6 @@
 #![allow(unused, dead_code)]
 mod create_surface;
-mod structs; use rodio::cpal::FromSample;
-use structs::*;
+mod structs; use structs::*;
 mod texture; use texture::*;
 mod input; use input::*;
 mod screen; use screen::*;
@@ -28,8 +27,8 @@ pub struct App {
     // audios: AudioManager,
 } impl App {
     pub async fn new() -> anyhow::Result<Self> {
-        let sdl_context = sdl3::init().unwrap();
-        let event_pump = sdl_context.event_pump().unwrap();
+        let sdl_context = sdl3::init()?;
+        let event_pump = sdl_context.event_pump()?;
         let render_context = RenderContext::new(sdl_context).await?;
 
         Ok(Self {
@@ -51,8 +50,20 @@ pub struct App {
     }
 
     pub async fn create_window(&mut self, title: &str, width: u32, height: u32) -> anyhow::Result<u32> {
-        let window = RenderWindow
+        let window = RenderWindow::new(&self.render_context, title, width, height)?;
+
+        let window_id = window.window.id();
+        self.windows.insert(window_id, window);
+        Ok(window_id)
     }
+
+    pub fn close_window(&mut self, window_id: u32) -> anyhow::Result<()> {
+        if let Some(window) = self.windows.remove(&window_id) {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Failed to close window"))
+        }
+    } 
 
     fn get_window_id(event: &Event) -> Option<u32> {
         match event {
@@ -145,34 +156,49 @@ pub struct RenderContext {
     pub queue: Queue,
     pub pipelines: SlotMap<RenderPipelineKey, RenderPipeline>,
     pub materials: SlotMap<MaterialKey, Material>,
-    // pub meshes: MeshManager,
 } impl RenderContext {
     pub async fn new(sdl_context: Sdl) -> anyhow::Result<Self> {
+        let video_subsystem = sdl_context.video()?;
+
+        let temp_window = Arc::new(video_subsystem.window("temp", 1, 1)
+            .hidden()
+            .build()?);
+
         let instance = Arc::new(Instance::new(&InstanceDescriptor {
-            backends: Backends::PRIMARY,
+            backends: Backends::SECONDARY,
             ..Default::default()
         }));
+
+        let temp_surface = unsafe {
+            create_surface::create_surface(instance.clone(), temp_window.clone())?
+        };
         
         let adapter = instance.request_adapter(
             &RequestAdapterOptions {
                 power_preference: PowerPreference::LowPower,
                 force_fallback_adapter: false,
-                compatible_surface: todo!(), // surfaces, binded to windows are created AFTER context, what do i do here
+                compatible_surface: Some(&temp_surface), // surfaces, binded to windows are created AFTER context, what do i do here
             },
-        ).await.unwrap(); 
+        ).await.ok_or(anyhow::anyhow!("Failed to get adapter"))?; 
 
         let (device, queue) = adapter.request_device(
-            &DeviceDescriptor {
-                label: None,
-                required_features: Features::empty(),
-                required_limits: Limits::default(),
-                memory_hints: Default::default(),
-            }, None,
+            &DeviceDescriptor::default(), 
+            None,
         ).await?;
 
-        let video_subsystem = sdl_context.video().unwrap();
+        drop(temp_surface);
+        drop(temp_window);
 
-        Ok(Self { sdl_context, instance, adapter, device, video_subsystem, queue, pipelines: SlotMap::with_key(), materials: SlotMap::with_key() })
+        Ok(Self { 
+            sdl_context, 
+            instance, 
+            adapter, 
+            device,
+            video_subsystem, 
+            queue, 
+            pipelines: SlotMap::with_key(), 
+            materials: SlotMap::with_key()
+        })
     }
 }
 
@@ -182,42 +208,43 @@ pub struct RenderWindow {
     pub config: SurfaceConfiguration,
     
     pub inputs: InputManager,
-    pub camera: Camera,
     pub dirty: bool,
 } impl RenderWindow {
-    pub fn new(render_context: &RenderContext) -> anyhow::Result<Self> {
+    pub fn new(render_context: &RenderContext, title: &str, width: u32, height: u32) -> anyhow::Result<Self> {
         let window = Arc::new(render_context.video_subsystem.window("sq", 800, 600)
             .position_centered()
-            .build()
-            .unwrap());
-        let size = window.size();
+            .build()?
+        );
 
-        let surface =  create_surface::create_surface(render_context.instance.clone(), window.clone()).unwrap();
+        let surface = create_surface::create_surface(render_context.instance.clone(), window.clone())?;
         
-        let surface_caps = surface.get_capabilities(&render_context.adapter);
-        let surface_format = surface_caps.formats.iter()
+        let caps = surface.get_capabilities(&render_context.adapter);
+        let format = caps.formats.iter()
             .find(|f| f.is_srgb())
             .copied()
-            .unwrap_or(surface_caps.formats[0]);
+            .unwrap_or(caps.formats[0]);
 
         // SurfaceConfiguration defines how the surface creates its underlying SurfaceTextures
         let config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.0,
-            height: size.1,
-            present_mode: surface_caps.present_modes[0],
-            alpha_mode: surface_caps.alpha_modes[0],
+            format,
+            width,
+            height,
+            present_mode: caps.present_modes[0],
+            alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
 
         surface.configure(&render_context.device, &config);
-        
-        let inputs = InputManager::new();
-        let camera = todo!();
 
-        Ok(Self { window, surface, config, inputs, camera, dirty: false })
+        Ok(Self { 
+            window, 
+            surface, 
+            config, 
+            inputs: InputManager::new(), 
+            dirty: false 
+        })
     }
 
     pub fn resize(&mut self, device: &Device, width: u32, height: u32) {

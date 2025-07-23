@@ -23,12 +23,12 @@ impl HasDisplayHandle for SyncWindow<'_> {
 pub fn create_surface(
     instance: Arc<wgpu::Instance>,
     window: Arc<Window>,
-) -> Result<wgpu::Surface<'static>, String> {
+) -> anyhow::Result<wgpu::Surface<'static>> {
     // Safety: We're ensuring the window lives as long as the surface
     // by storing it in an Arc
     unsafe {
         let window_ref: &'static Window = std::mem::transmute(&*window);
         instance.create_surface(SyncWindow(window_ref))
-            .map_err(|err| err.to_string())
+            .map_err(|err| anyhow::anyhow!("Failed to create surface: {:?}", err))
     }
 }
