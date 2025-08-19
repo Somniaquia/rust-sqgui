@@ -5,6 +5,7 @@ use sdl3::keyboard;
 use sdl3::mouse;
 use sdl3::mouse::MouseButton;
 use slotmap::SlotMap;
+use smart_default::SmartDefault;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] 
 pub enum Button { 
@@ -15,10 +16,10 @@ pub enum Button {
 #[derive(Debug, Clone, Copy)] 
 pub enum ButtonState { Up(i32), Down(i32) } // up/down simply means current state, pressed/released now means keystate was also changed that frame
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, SmartDefault)]
 pub struct PenState {
     pub pressure: f32, // 0.0 ~ 1.0
-    pub tilt: Vec2, // -90.0 ~ 90.0, left-right, top-down
+    #[default(Vector2::new(0.0, 0.0))] pub tilt: Vector2<f32>, // -90.0 ~ 90.0, left-right, top-down
     pub distance: f32, // 0.0 ~ 1.0, distance from pen to tablet
     pub rotation: f32, // -180.0 ~ 179.9, clockwise, barrel rotation
     pub slider: f32, // 0.0 ~ 1.0, pen finger wheel or slider whatever it is
@@ -27,6 +28,8 @@ pub struct PenState {
     pub is_down: bool,
 }
 
+type Callback = Option<Box<dyn FnMut() + Send + Sync + 'static>>;
+
 slotmap::new_key_type! { pub struct KeybindKey; }
 pub struct Keybind {
     pub button_groups: Vec<HashSet<Button>>,
@@ -34,6 +37,7 @@ pub struct Keybind {
     pub attatched_screen: Option<ScreenKey>,
 
     pub state: ButtonState,
+    pub callbacks: (Callback, Callback, Callback),
 } impl Keybind {
     
 }

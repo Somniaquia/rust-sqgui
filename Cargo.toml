@@ -13,6 +13,8 @@ wgpu = "24.0.1"
 bytemuck = { version = "1.16", features = ["derive"] } 
 cgmath = "0.18.0"
 slotmap = { version = "1.0.7", features = ["serde"]}
+hecs = "0.10.5"
+smart-default = "0.7.1"
 
 [dependencies.sdl3]
 version = "0.14.16"
