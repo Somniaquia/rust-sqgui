@@ -3,9 +3,16 @@ name = "sq"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "sq"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sq"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1.0.98"
-image = "0.25.6"
 raw-window-handle = "0.6.2"
 rodio = "0.20.1"
 tokio = { version = "1.45.0", features = ["full"] }
@@ -20,7 +27,7 @@ smart-default = "0.7.1"
 version = "0.14.16"
 features = ["build-from-source", "raw-window-handle"]
 
-[dependenices.image]
+[dependencies.image]
 version = "0.25.6"
 default-features = false
 features = ["png", "jpeg"]

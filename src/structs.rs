@@ -1,4 +1,4 @@
-use slotmap::new_key_type;
+use crate::*;
 
 #[repr(C)]
 #[derive(PartialEq, Eq, Copy, Clone, Hash)]
@@ -14,7 +14,8 @@ pub struct Rectangle<S> {
 pub struct Vertex {
     pub position: [f32; 3],
     pub tex_coords: [f32; 2],
-} impl Vertex {
+}
+impl Vertex {
     pub const ATTRIBS: [wgpu::VertexAttribute; 2] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
 
@@ -26,14 +27,16 @@ pub struct Vertex {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
                 wgpu::VertexAttribute {
-                    offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x3,
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
                 },
                 wgpu::VertexAttribute {
                     offset: mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x2,
                 },
-            ]
+            ],
         }
     }
 }
@@ -44,10 +47,13 @@ pub type IndexBuffer = Vec<u16>;
 pub struct ModelInstance {
     pub position: cgmath::Vector3<f32>,
     pub rotation: cgmath::Quaternion<f32>,
-} impl ModelInstance {
+}
+impl ModelInstance {
     pub fn to_raw(&self) -> ModelInstanceRaw {
         ModelInstanceRaw {
-            model: (cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation)).into(),
+            model: (cgmath::Matrix4::from_translation(self.position)
+                * cgmath::Matrix4::from(self.rotation))
+            .into(),
         }
     }
 }
@@ -56,7 +62,8 @@ pub struct ModelInstance {
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ModelInstanceRaw {
     pub model: [[f32; 4]; 4],
-} impl ModelInstanceRaw {
+}
+impl ModelInstanceRaw {
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;
         wgpu::VertexBufferLayout {
@@ -94,3 +101,4 @@ pub struct ModelInstanceRaw {
         }
     }
 }
+
