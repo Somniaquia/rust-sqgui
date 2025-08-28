@@ -1,4 +1,6 @@
 use crate::*;
+use std::sync::Arc;
+
 use image::GenericImageView;
 use sdl3::*;
 use wgpu::*;
@@ -50,7 +52,7 @@ impl SQTexture {
         queue: &wgpu::Queue,
         bytes: &[u8],
         label: &str,
-    ) -> Result<Self> {
+    ) -> anyhow::Result<Self> {
         let img = image::load_from_memory(bytes)?;
         Self::from_image(device, queue, &img, Some(label))
     }
@@ -60,7 +62,7 @@ impl SQTexture {
         queue: &wgpu::Queue,
         img: &image::DynamicImage,
         label: Option<&str>,
-    ) -> Result<Self> {
+    ) -> anyhow::Result<Self> {
         let rgba = img.to_rgba8();
         let dimensions = img.dimensions();
 
@@ -123,4 +125,3 @@ impl SQTexture {
         self.texture.format()
     }
 }
-

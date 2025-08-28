@@ -1,10 +1,10 @@
 use crate::*;
+use std::collections::{HashMap, HashSet, VecDeque, hash_map::Entry};
+
 use cgmath::*;
 use sdl3::{event::*, keyboard::*, mouse::*, pen::*};
 use slotmap::SlotMap;
 use smart_default::SmartDefault;
-use std::collections::hash_map::Entry;
-use std::collections::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Button {
@@ -266,4 +266,3 @@ impl InputManager {
         }
     }
 }
-

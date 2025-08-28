@@ -1,4 +1,5 @@
 use crate::*;
+use slotmap::SlotMap;
 
 pub struct ScreenManager {
     pub screens: SlotMap<ScreenKey, Screen>,

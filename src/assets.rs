@@ -1,8 +1,9 @@
 use crate::*;
-
 use std::{collections::HashMap, sync::RwLock};
+
 use anyhow::Context;
-use slotmap::new_key_type;
+use slotmap::{SlotMap, new_key_type};
+use wgpu::RenderPipeline;
 
 new_key_type! {
     pub struct TextureKey;
@@ -28,7 +29,8 @@ pub struct AssetManager {
     pub textures: RwLock<SlotMap<TextureKey, SQTexture>>,
     pub shaders: RwLock<SlotMap<ShaderKey, RenderPipeline>>,
     pub materials: RwLock<SlotMap<MaterialKey, Material>>,
-} impl AssetManager {
+}
+impl AssetManager {
     pub fn new() -> Self {
         Self {
             texture_assets: HashMap::new().into(),
@@ -45,27 +47,30 @@ pub struct AssetManager {
         }
     }
 
-    pub fn load_texture(&mut self, render_context: &RenderContext, path: &str) -> anyhow::Result<AssetName> {
+    pub fn load_texture(
+        &mut self,
+        render_context: &RenderContext,
+        path: &str,
+    ) -> anyhow::Result<AssetName> {
         if self.texture_assets.read().unwrap().contains_key(path) {
             return Ok(path.to_string());
         }
 
         let bytes = std::fs::read(path)
             .with_context(|| format!("Failed to read texture file: {}", path))?;
-        
-        let texture = SQTexture::from_bytes(
-            &render_context.device, 
-            &render_context.queue, 
-            &bytes, 
-            path
-        )?;
-        
+
+        let texture =
+            SQTexture::from_bytes(&render_context.device, &render_context.queue, &bytes, path)?;
+
         let texture_key = self.textures.write().unwrap().insert(texture);
-        
-        self.texture_assets.write().unwrap().insert(path.to_string(), texture_key);
+
+        self.texture_assets
+            .write()
+            .unwrap()
+            .insert(path.to_string(), texture_key);
         Ok(path.to_string())
     }
-    
+
     pub fn get_texture_key(&self, asset_key: &AssetName) -> Option<TextureKey> {
         self.texture_assets.read().unwrap().get(asset_key).copied()
     }

@@ -1,3 +1,5 @@
+use cgmath::BaseNum;
+
 use crate::*;
 
 #[repr(C)]
@@ -7,6 +9,21 @@ pub struct Rectangle<S> {
     pub y: S,
     pub width: S,
     pub height: S,
+}
+impl<S: BaseNum> Rectangle<S> {
+    pub fn min(&self) -> Vector2<S> {
+        Vector2 {
+            x: self.x,
+            y: self.y,
+        }
+    }
+
+    pub fn max(&self) -> Vector2<S> {
+        Vector2 {
+            x: self.x + self.width,
+            y: self.y + self.height,
+        }
+    }
 }
 
 #[repr(C)]
@@ -101,4 +118,3 @@ impl ModelInstanceRaw {
         }
     }
 }
-
